@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Camera to 100-300KB</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+    * { box-sizing: border-box; font-family: sans-serif; }
+  body { background: #0f0f0f; color: #fff; margin: 0; padding: 12px; text-align: center; }
+  h1 { font-size: 21px; margin: 5px 0; } h1 span { color: #00ff88; }
+  .cam-box { max-width: 520px; margin: 10px auto; background: #1a1a1a; border-radius: 18px; padding: 10px; position: relative; overflow: hidden; }
+  video { width: 100%; border-radius: 12px; background: #000; aspect-ratio: 4/3; object-fit: cover; }
+  #camOff { padding: 40px 10px; color: #aaa; }
+  .controls { display: flex; gap: 10px; margin-top: 10px; }
+  .btn { flex: 1; padding: 14px 5px; border-radius: 12px; font-weight: bold; font-size: 15px; border: none; cursor: pointer; }
+  .btn-take { background: #00ff88; color: #000; font-size: 17px; }
+  .btn-flip { background: #333; color: #fff; flex: 0.4; }
+  .btn-gallery { background: #222; color: #fff; border: 1px dashed #555; width: 100%; max-width: 520px; margin: 10px auto 0; padding: 11px; border-radius: 12px; cursor: pointer; display: block; }
+  .btn-send { background: #ffcc00; color: #000; width: 100%; max-width: 520px; padding: 14px; border-radius: 12px; font-weight: bold; font-size: 16px; border: none; cursor: pointer; display: none; margin: 12px auto 0; }
+  .btn-zip { background: #fff; color: #000; width: 100%; max-width: 520px; padding: 12px; border-radius: 12px; font-weight: bold; border: none; cursor: pointer; display: none; margin: 8px auto 0; }
+  input[type=file] { display: none; }
+  #status { color: #aaa; font-size: 13px; margin: 8px 0; }
+  #grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; max-width: 700px; margin: 15px auto; }
+  @media (max-width: 500px) { #grid { grid-template-columns: 1fr; } }
+  .card { background: #1a1a1a; border-radius: 15px; padding: 10px; text-align: left; position: relative; }
+  .card img { width: 100%; height: 160px; object-fit: cover; border-radius: 10px; }
+  .card .row { display: flex; justify-content: space-between; font-size: 13px; margin-top: 8px; }
+  .card .row b { color: #00ff88; }
+  .card .del { position: absolute; top: 15px; right: 15px; background: #ff4444; color: #fff; border: none; border-radius: 50%; width: 28px; height: 28px; cursor: pointer; font-weight: bold; }
+  .card a { display: block; text-align: center; background: #fff; color: #000; text-decoration: none; font-weight: bold; padding: 9px; border-radius: 9px; margin-top: 10px; font-size: 14px; }
+  .badge { font-size: 11px; background: #00ff88; color: #000; padding: 3px 7px; border-radius: 20px; font-weight: bold; }
+</style>
+</head>
+<body>
+
+<h1>📷 Camera <span>100KB - 300KB</span></h1>
+<p style="color:#aaa; font-size:13px; margin:0;">Photo lo -> Auto Convert -> Send to Computer</p>
+
+<!-- ===== CAMERA BOX - BY DEFAULT OPEN ===== -->
+<div class="cam-box">
+  <video id="video" autoplay playsinline muted></video>
+  <div id="camOff" style="display:none;">Camera ON nahi hua.<br>Permission Allow karo aur Refresh karo.<br><button onclick="startCamera()" style="margin-top:10px; padding:10px 20px; border-radius:10px; border:none; background:#00ff88; font-weight:bold;">Camera Dobara Khol</button></div>
+  <div class="controls">
+    <button class="btn btn-flip" onclick="flipCamera()">🔄 Flip</button>
+    <button class="btn btn-take" onclick="takePhoto()">📸 TAKE PHOTO</button>
+  </div>
+  <canvas id="captureCanvas" style="display:none;"></canvas>
+</div>
+
+<label for="galleryInput" class="btn-gallery">🖼️ Ya Gallery se 20 Photos Chuno</label>
+<input type="file" id="galleryInput" accept="image/*" multiple>
+
+<p id="status">Camera khul raha hai...</p>
+
+<!-- ===== SEND TO COMPUTER - BACKEND YAHAN JUDEGA ===== -->
+<button id="sendBtn" class="btn-send" onclick="sendToComputer()">💻 SEND TO COMPUTER ( <span id="count">0</span> Photos )</button>
+<button id="zipBtn" class="btn-zip">📦 ZIP Download Karo</button>
+
+<div id="grid"></div>
+
+<script>
+// ============ ⚙️ BACKEND SETTING - YAHAN APNA URL DAALNA ============
+// Aage jab tera EQ backend banega, bas ye line badal dena:
+const BACKEND_URL = "https://your-computer-url.com/upload"; // <-- YAHAN URL
+// ==================================================================
+
+const MIN = 100 * 1024, MAX = 300 * 1024;
+let allResults = [];
+let stream = null;
+let facingMode = "environment"; // back camera
+
+// 1. PAGE KHULTE HI CAMERA ON
+window.addEventListener('load', startCamera);
+
+async function startCamera() {
+  try {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    document.getElementById('camOff').style.display = 'none';
+    document.getElementById('video').style.display = 'block';
+
+    stream = await navigator.mediaDevices.getUserMedia({ 
+      video: { facingMode: facingMode, width: { ideal: 1920 }, height: { ideal: 1080 } }, 
+      audio: false 
+    });
+    document.getElementById('video').srcObject = stream;
+    document.getElementById('status').textContent = 'Camera Ready hai - TAKE PHOTO dabao';
+  } catch (e) {
+    document.getElementById('video').style.display = 'none';
+    document.getElementById('camOff').style.display = 'block';
+    document.getElementById('status').textContent = 'Camera permission nahi mili';
+  }
+}
+
+function flipCamera() {
+  facingMode = facingMode === "environment" ? "user" : "environment";
+  startCamera();
+}
+
+// 2. TAKE PHOTO -> CONVERT -> NICHE ADD
+async function takePhoto() {
+  const video = document.getElementById('video');
+  if (!video.srcObject) { alert('Pehle camera ON hone do'); return; }
+
+  document.getElementById('status').textContent = 'Photo li ja rahi hai...';
+
+  const canvas = document.getElementById('captureCanvas');
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+
+  canvas.toBlob(async (blob) => {
+    const file = new File([blob], `camera-${Date.now()}.jpg`, { type: 'image/jpeg' });
+    const compressed = await compressOne(file);
+    addToList(file, compressed, 'camera');
+    document.getElementById('status').textContent = 'Ho gaya! ✅ Aur photo lo ya SEND dabao';
+    // Halki vibration
+    if (navigator.vibrate) navigator.vibrate(80);
+  }, 'image/jpeg', 0.95);
+}
+
+// Gallery se bhi
+document.getElementById('galleryInput').addEventListener('change', async (e) => {
+  const files = [...e.target.files].slice(0, 20);
+  for (const f of files) {
+    const c = await compressOne(f);
+    addToList(f, c, 'gallery');
+  }
+});
+
+function addToList(oldFile, newBlob, from) {
+  const id = Date.now() + Math.random();
+  allResults.push({ id, name: oldFile.name.replace(/\.[^.]+$/, '') + '-100-300kb.jpg', blob: newBlob });
+  updateButtons();
+
+  const url = URL.createObjectURL(newBlob);
+  const div = document.createElement('div');
+  div.className = 'card';
+  div.id = 'card-' + id;
+  div.innerHTML = `
+    <button class="del" onclick="deletePhoto('${id}')">×</button>
+    <img src="${url}">
+    <div style="margin-top:6px;"><span class="badge">${from === 'camera' ? '📷 CAMERA' : '🖼️ GALLERY'}</span></div>
+    <div class="row"><span>Pehle: <b>${(oldFile.size/1024).toFixed(0)} KB</b></span><span>Ab: <b>${(newBlob.size/1024).toFixed(0)} KB</b></span></div>
+    <a href="${url}" download="${oldFile.name.replace(/\.[^.]+$/, '')}-100-300kb.jpg">⬇ Download</a>
+  `;
+  document.getElementById('grid').prepend(div);
+}
+
+function deletePhoto(id) {
+  allResults = allResults.filter(r => r.id != id);
+  document.getElementById('card-' + id)?.remove();
+  updateButtons();
+}
+
+function updateButtons() {
+  document.getElementById('count').textContent = allResults.length;
+  const show = allResults.length > 0;
+  document.getElementById('sendBtn').style.display = show ? 'block' : 'none';
+  document.getElementById('zipBtn').style.display = allResults.length > 1 ? 'block' : 'none';
+}
+
+// 3. SEND TO COMPUTER - BACKEND
+async function sendToComputer() {
+  if (!allResults.length) return alert('Pehle photo lo');
+  if (BACKEND_URL.includes('your-computer-url')) {
+    alert('Abhi BACKEND_URL set nahi hai!\n\nCode me upar jaake:\nconst BACKEND_URL = "tumhara-url"\n\nWahan apna EQ backend URL daal do.');
+    return;
+  }
+
+  document.getElementById('status').textContent = 'Computer ko bhej rahe hai...';
+  const form = new FormData();
+  allResults.forEach((r, i) => form.append('photos', r.blob, r.name));
+
+  try {
+    const res = await fetch(BACKEND_URL, { method: 'POST', body: form });
+    if (res.ok) {
+      alert('✅ Sab photos computer pe pahunch gayi!');
+      document.getElementById('status').textContent = 'Sent Successfully ✅';
+    } else {
+      alert('❌ Server ne error diya: ' + res.status);
+    }
+  } catch (e) {
+    alert('❌ Computer se connect nahi hua: ' + e.message);
+  }
+}
+
+// ZIP
+document.getElementById('zipBtn').addEventListener('click', async () => {
+  const zip = new JSZip();
+  allResults.forEach(r => zip.file(r.name, r.blob));
+  const content = await zip.generateAsync({ type: 'blob' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(content);
+  a.download = 'camera-100-300kb.zip';
+  a.click();
+});
+
+// Compress Logic - 100 to 300
+function compressOne(file) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.src = URL.createObjectURL(file);
+    img.onload = async () => {
+      if (file.size >= MIN && file.size <= MAX) { resolve(file); return; }
+      let w = img.width, h = img.height, q = 0.92;
+      let blob = await makeBlob(img, w, h, q);
+      for (let i = 0; i < 12; i++) {
+        if (blob.size <= MAX && blob.size >= MIN) break;
+        if (blob.size > MAX) q -= 0.07; else { q += 0.05; if (q >= 0.95) break; }
+        if (q <= 0.1) break; if (q > 1) q = 0.95;
+        blob = await makeBlob(img, w, h, q);
+      }
+      let t = 0;
+      while (blob.size > MAX && t < 8) { w = Math.floor(w*0.85); h = Math.floor(h*0.85); blob = await makeBlob(img, w, h, 0.85); t++; }
+      t = 0;
+      while (blob.size < MIN && t < 4) { if (w > img.width*1.5) break; w = Math.floor(w*1.15); h = Math.floor(h*1.15); blob = await makeBlob(img, w, h, 0.92); t++; }
+      resolve(blob);
+    };
+  });
+}
+function makeBlob(img, w, h, q) {
+  return new Promise(res => {
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0,0,w,h);
+    ctx.drawImage(img,0,0,w,h); c.toBlob(res,'image/jpeg',q);
+  });
+}
+</script>
+</body>
+</html>
