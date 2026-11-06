@@ -3,19 +3,22 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Camera to 100-300KB</title>
+<title>Auto Crop Scanner</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<!-- OpenCV for Paper Detect -->
+<script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady()"></script>
 <style>
     * { box-sizing: border-box; font-family: sans-serif; }
   body { background: #0f0f0f; color: #fff; margin: 0; padding: 12px; text-align: center; }
   h1 { font-size: 21px; margin: 5px 0; } h1 span { color: #00ff88; }
-  .cam-box { max-width: 520px; margin: 10px auto; background: #1a1a1a; border-radius: 18px; padding: 10px; position: relative; overflow: hidden; }
+  .cam-box { max-width: 520px; margin: 10px auto; background: #1a1a1a; border-radius: 18px; padding: 10px; }
   video { width: 100%; border-radius: 12px; background: #000; aspect-ratio: 4/3; object-fit: cover; }
-  #camOff { padding: 40px 10px; color: #aaa; }
-  .controls { display: flex; gap: 10px; margin-top: 10px; }
-  .btn { flex: 1; padding: 14px 5px; border-radius: 12px; font-weight: bold; font-size: 15px; border: none; cursor: pointer; }
-  .btn-take { background: #00ff88; color: #000; font-size: 17px; }
-  .btn-flip { background: #333; color: #fff; flex: 0.4; }
+  .controls { display: flex; gap: 8px; margin-top: 10px; }
+  .btn { flex: 1; padding: 13px 5px; border-radius: 12px; font-weight: bold; font-size: 14px; border: none; cursor: pointer; }
+  .btn-take { background: #00ff88; color: #000; font-size: 16px; flex: 1.5; }
+  .btn-flip { background: #333; color: #fff; }
+  .btn-crop { background: #00ff88; color: #000; }
+  .btn-crop.off { background: #333; color: #888; }
   .btn-gallery { background: #222; color: #fff; border: 1px dashed #555; width: 100%; max-width: 520px; margin: 10px auto 0; padding: 11px; border-radius: 12px; cursor: pointer; display: block; }
   .btn-send { background: #ffcc00; color: #000; width: 100%; max-width: 520px; padding: 14px; border-radius: 12px; font-weight: bold; font-size: 16px; border: none; cursor: pointer; display: none; margin: 12px auto 0; }
   .btn-zip { background: #fff; color: #000; width: 100%; max-width: 520px; padding: 12px; border-radius: 12px; font-weight: bold; border: none; cursor: pointer; display: none; margin: 8px auto 0; }
@@ -27,205 +30,201 @@
   .card img { width: 100%; height: 160px; object-fit: cover; border-radius: 10px; }
   .card .row { display: flex; justify-content: space-between; font-size: 13px; margin-top: 8px; }
   .card .row b { color: #00ff88; }
-  .card .del { position: absolute; top: 15px; right: 15px; background: #ff4444; color: #fff; border: none; border-radius: 50%; width: 28px; height: 28px; cursor: pointer; font-weight: bold; }
+  .card .del { position: absolute; top: 15px; right: 15px; background: #ff4444; color: #fff; border: none; border-radius: 50%; width: 28px; height: 28px; cursor: pointer; }
   .card a { display: block; text-align: center; background: #fff; color: #000; text-decoration: none; font-weight: bold; padding: 9px; border-radius: 9px; margin-top: 10px; font-size: 14px; }
   .badge { font-size: 11px; background: #00ff88; color: #000; padding: 3px 7px; border-radius: 20px; font-weight: bold; }
+  .badge-crop { background: #ffcc00; }
 </style>
 </head>
 <body>
 
-<h1>📷 Camera <span>100KB - 300KB</span></h1>
-<p style="color:#aaa; font-size:13px; margin:0;">Photo lo -> Auto Convert -> Send to Computer</p>
+<h1>📄 Auto Crop <span>100KB - 300KB</span></h1>
+<p style="color:#aaa; font-size:13px; margin:0;">Paper Detect -> Auto Crop -> Send to Computer</p>
 
-<!-- ===== CAMERA BOX - BY DEFAULT OPEN ===== -->
 <div class="cam-box">
   <video id="video" autoplay playsinline muted></video>
-  <div id="camOff" style="display:none;">Camera ON nahi hua.<br>Permission Allow karo aur Refresh karo.<br><button onclick="startCamera()" style="margin-top:10px; padding:10px 20px; border-radius:10px; border:none; background:#00ff88; font-weight:bold;">Camera Dobara Khol</button></div>
   <div class="controls">
-    <button class="btn btn-flip" onclick="flipCamera()">🔄 Flip</button>
+    <button class="btn btn-flip" onclick="flipCamera()">🔄</button>
     <button class="btn btn-take" onclick="takePhoto()">📸 TAKE PHOTO</button>
+    <button id="cropBtn" class="btn btn-crop" onclick="toggleCrop()">✂️ CROP: ON</button>
   </div>
   <canvas id="captureCanvas" style="display:none;"></canvas>
 </div>
 
 <label for="galleryInput" class="btn-gallery">🖼️ Ya Gallery se 20 Photos Chuno</label>
 <input type="file" id="galleryInput" accept="image/*" multiple>
+<p id="status">OpenCV load ho raha hai...</p>
 
-<p id="status">Camera khul raha hai...</p>
-
-<!-- ===== SEND TO COMPUTER - BACKEND YAHAN JUDEGA ===== -->
-<button id="sendBtn" class="btn-send" onclick="sendToComputer()">💻 SEND TO COMPUTER ( <span id="count">0</span> Photos )</button>
+<button id="sendBtn" class="btn-send" onclick="sendToComputer()">💻 SEND TO COMPUTER ( <span id="count">0</span> )</button>
 <button id="zipBtn" class="btn-zip">📦 ZIP Download Karo</button>
-
 <div id="grid"></div>
 
 <script>
-// ============ ⚙️ BACKEND SETTING - YAHAN APNA URL DAALNA ============
-// Aage jab tera EQ backend banega, bas ye line badal dena:
-const BACKEND_URL = "https://your-computer-url.com/upload"; // <-- YAHAN URL
-// ==================================================================
-
+const BACKEND_URL = "http://192.168.43.150:5000/upload"; // Apna IP daal
 const MIN = 100 * 1024, MAX = 300 * 1024;
 let allResults = [];
-let stream = null;
-let facingMode = "environment"; // back camera
+let stream = null, facingMode = "environment";
+let autoCrop = true, cvReady = false;
 
-// 1. PAGE KHULTE HI CAMERA ON
+function onOpenCvReady() { cvReady = true; document.getElementById('status').textContent = 'Ready - Paper pe camera rakho'; }
+function toggleCrop() {
+  autoCrop = !autoCrop;
+  const b = document.getElementById('cropBtn');
+  b.textContent = autoCrop ? '✂️ CROP: ON' : '✂️ CROP: OFF';
+  b.classList.toggle('off', !autoCrop);
+}
+
 window.addEventListener('load', startCamera);
-
 async function startCamera() {
   try {
     if (stream) stream.getTracks().forEach(t => t.stop());
-    document.getElementById('camOff').style.display = 'none';
-    document.getElementById('video').style.display = 'block';
-
-    stream = await navigator.mediaDevices.getUserMedia({ 
-      video: { facingMode: facingMode, width: { ideal: 1920 }, height: { ideal: 1080 } }, 
-      audio: false 
-    });
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facingMode, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false });
     document.getElementById('video').srcObject = stream;
-    document.getElementById('status').textContent = 'Camera Ready hai - TAKE PHOTO dabao';
-  } catch (e) {
-    document.getElementById('video').style.display = 'none';
-    document.getElementById('camOff').style.display = 'block';
-    document.getElementById('status').textContent = 'Camera permission nahi mili';
-  }
+  } catch(e) { document.getElementById('status').textContent = 'Camera permission nahi mili'; }
 }
+function flipCamera() { facingMode = facingMode === "environment" ? "user" : "environment"; startCamera(); }
 
-function flipCamera() {
-  facingMode = facingMode === "environment" ? "user" : "environment";
-  startCamera();
-}
-
-// 2. TAKE PHOTO -> CONVERT -> NICHE ADD
+// ===== TAKE PHOTO + AUTO CROP =====
 async function takePhoto() {
   const video = document.getElementById('video');
-  if (!video.srcObject) { alert('Pehle camera ON hone do'); return; }
-
+  if (!video.srcObject) return alert('Camera ON hone do');
   document.getElementById('status').textContent = 'Photo li ja rahi hai...';
 
   const canvas = document.getElementById('captureCanvas');
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
+  canvas.width = video.videoWidth; canvas.height = video.videoHeight;
   canvas.getContext('2d').drawImage(video, 0, 0);
 
   canvas.toBlob(async (blob) => {
     const file = new File([blob], `camera-${Date.now()}.jpg`, { type: 'image/jpeg' });
-    const compressed = await compressOne(file);
-    addToList(file, compressed, 'camera');
-    document.getElementById('status').textContent = 'Ho gaya! ✅ Aur photo lo ya SEND dabao';
-    // Halki vibration
+    let isCropped = false;
+    let finalFile = file;
+
+    // Agar AutoCrop ON hai aur OpenCV ready hai to crop try karo
+    if (autoCrop && cvReady) {
+      document.getElementById('status').textContent = 'Paper dhoond raha hu... ✂️';
+      const croppedBlob = await detectAndCrop(canvas);
+      if (croppedBlob) {
+        finalFile = new File([croppedBlob], file.name, { type: 'image/jpeg' });
+        isCropped = true;
+      }
+    }
+
+    const compressed = await compressOne(finalFile);
+    addToList(file, compressed, 'camera', isCropped);
+    document.getElementById('status').textContent = isCropped ? 'Ho gaya! ✅ Paper Crop ho gaya' : 'Ho gaya! ✅ Paper nahi mila, full photo li';
     if (navigator.vibrate) navigator.vibrate(80);
   }, 'image/jpeg', 0.95);
 }
 
-// Gallery se bhi
+// ===== PAPER DETECT + CROP LOGIC - OPENCV =====
+async function detectAndCrop(sourceCanvas) {
+  return new Promise((resolve) => {
+    try {
+      let src = cv.imread(sourceCanvas);
+      let gray = new cv.Mat();
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+      cv.GaussianBlur(gray, gray, new cv.Size(5,5), 0);
+      let edges = new cv.Mat();
+      cv.Canny(gray, edges, 75, 200);
+
+      let contours = new cv.MatVector();
+      let hierarchy = new cv.Mat();
+      cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+
+      let maxArea = 0, bestApprox = null;
+      for (let i = 0; i < contours.size(); i++) {
+        let cnt = contours.get(i);
+        let area = cv.contourArea(cnt);
+        // Paper kam se kam 20% area ka hona chahiye
+        if (area < src.rows * src.cols * 0.2) continue;
+        let peri = cv.arcLength(cnt, true);
+        let approx = new cv.Mat();
+        cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+        if (approx.rows === 4 && area > maxArea) {
+          maxArea = area; bestApprox = approx;
+        } else { approx.delete(); }
+      }
+
+      if (!bestApprox) { src.delete(); gray.delete(); edges.delete(); contours.delete(); hierarchy.delete(); resolve(null); return; }
+
+      // 4 points nikalo
+      let pts = [];
+      for (let i = 0; i < 4; i++) pts.push({ x: bestApprox.intAt(i,0), y: bestApprox.intAt(i,1) });
+      // Order: Top-Left, Top-Right, Bottom-Right, Bottom-Left
+      pts.sort((a,b) => a.y - b.y);
+      let top = pts.slice(0,2).sort((a,b) => a.x - b.x);
+      let bottom = pts.slice(2,4).sort((a,b) => a.x - b.x);
+      let ordered = [top[0], top[1], bottom[1], bottom[0]];
+
+      let width = Math.max(Math.hypot(ordered[1].x-ordered[0].x, ordered[1].y-ordered[0].y), Math.hypot(ordered[2].x-ordered[3].x, ordered[2].y-ordered[3].y));
+      let height = Math.max(Math.hypot(ordered[3].x-ordered[0].x, ordered[3].y-ordered[0].y), Math.hypot(ordered[2].x-ordered[1].x, ordered[2].y-ordered[1].y));
+
+      let srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [ordered[0].x, ordered[0].y, ordered[1].x, ordered[1].y, ordered[2].x, ordered[2].y, ordered[3].x, ordered[3].y]);
+      let dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0,0, width,0, width,height, 0,height]);
+      let M = cv.getPerspectiveTransform(srcTri, dstTri);
+      let dst = new cv.Mat();
+      cv.warpPerspective(src, dst, M, new cv.Size(width, height));
+
+      cv.imshow(sourceCanvas, dst); // Canvas pe cropped image daal do
+      sourceCanvas.toBlob(b => {
+        src.delete(); gray.delete(); edges.delete(); contours.delete(); hierarchy.delete(); bestApprox.delete(); srcTri.delete(); dstTri.delete(); M.delete(); dst.delete();
+        resolve(b);
+      }, 'image/jpeg', 0.95);
+
+    } catch(e) { console.log("Crop fail", e); resolve(null); }
+  });
+}
+
+// Gallery
 document.getElementById('galleryInput').addEventListener('change', async (e) => {
-  const files = [...e.target.files].slice(0, 20);
+  const files = [...e.target.files].slice(0,20);
   for (const f of files) {
-    const c = await compressOne(f);
-    addToList(f, c, 'gallery');
+    let final = f, cropped = false;
+    if (autoCrop && cvReady) {
+      const img = new Image(); img.src = URL.createObjectURL(f); await new Promise(r => img.onload = r);
+      const c = document.createElement('canvas'); c.width = img.width; c.height = img.height; c.getContext('2d').drawImage(img,0,0);
+      const b = await detectAndCrop(c); if (b) { final = new File([b], f.name, {type:'image/jpeg'}); cropped = true; }
+    }
+    const comp = await compressOne(final); addToList(f, comp, 'gallery', cropped);
   }
 });
 
-function addToList(oldFile, newBlob, from) {
+function addToList(oldFile, newBlob, from, cropped) {
   const id = Date.now() + Math.random();
   allResults.push({ id, name: oldFile.name.replace(/\.[^.]+$/, '') + '-100-300kb.jpg', blob: newBlob });
   updateButtons();
-
   const url = URL.createObjectURL(newBlob);
-  const div = document.createElement('div');
-  div.className = 'card';
-  div.id = 'card-' + id;
-  div.innerHTML = `
-    <button class="del" onclick="deletePhoto('${id}')">×</button>
-    <img src="${url}">
-    <div style="margin-top:6px;"><span class="badge">${from === 'camera' ? '📷 CAMERA' : '🖼️ GALLERY'}</span></div>
-    <div class="row"><span>Pehle: <b>${(oldFile.size/1024).toFixed(0)} KB</b></span><span>Ab: <b>${(newBlob.size/1024).toFixed(0)} KB</b></span></div>
-    <a href="${url}" download="${oldFile.name.replace(/\.[^.]+$/, '')}-100-300kb.jpg">⬇ Download</a>
-  `;
+  const div = document.createElement('div'); div.className = 'card'; div.id = 'card-' + id;
+  div.innerHTML = `<button class="del" onclick="deletePhoto('${id}')">×</button><img src="${url}"><div style="margin-top:6px;"><span class="badge">${from==='camera'?'📷 CAMERA':'🖼️ GALLERY'}</span> ${cropped?'<span class="badge badge-crop">✂️ AUTO CROPPED</span>':''}</div><div class="row"><span>Pehle: <b>${(oldFile.size/1024).toFixed(0)} KB</b></span><span>Ab: <b>${(newBlob.size/1024).toFixed(0)} KB</b></span></div><a href="${url}" download="${oldFile.name}">⬇ Download</a>`;
   document.getElementById('grid').prepend(div);
 }
+function deletePhoto(id) { allResults = allResults.filter(r => r.id != id); document.getElementById('card-'+id)?.remove(); updateButtons(); }
+function updateButtons() { document.getElementById('count').textContent = allResults.length; document.getElementById('sendBtn').style.display = allResults.length ? 'block':'none'; document.getElementById('zipBtn').style.display = allResults.length>1?'block':'none'; }
 
-function deletePhoto(id) {
-  allResults = allResults.filter(r => r.id != id);
-  document.getElementById('card-' + id)?.remove();
-  updateButtons();
-}
-
-function updateButtons() {
-  document.getElementById('count').textContent = allResults.length;
-  const show = allResults.length > 0;
-  document.getElementById('sendBtn').style.display = show ? 'block' : 'none';
-  document.getElementById('zipBtn').style.display = allResults.length > 1 ? 'block' : 'none';
-}
-
-// 3. SEND TO COMPUTER - BACKEND
 async function sendToComputer() {
-  if (!allResults.length) return alert('Pehle photo lo');
-  if (BACKEND_URL.includes('your-computer-url')) {
-    alert('Abhi BACKEND_URL set nahi hai!\n\nCode me upar jaake:\nconst BACKEND_URL = "tumhara-url"\n\nWahan apna EQ backend URL daal do.');
-    return;
-  }
-
-  document.getElementById('status').textContent = 'Computer ko bhej rahe hai...';
-  const form = new FormData();
-  allResults.forEach((r, i) => form.append('photos', r.blob, r.name));
-
-  try {
-    const res = await fetch(BACKEND_URL, { method: 'POST', body: form });
-    if (res.ok) {
-      alert('✅ Sab photos computer pe pahunch gayi!');
-      document.getElementById('status').textContent = 'Sent Successfully ✅';
-    } else {
-      alert('❌ Server ne error diya: ' + res.status);
-    }
-  } catch (e) {
-    alert('❌ Computer se connect nahi hua: ' + e.message);
-  }
+  if (!allResults.length) return;
+  document.getElementById('status').textContent = 'Bhej rahe hai...';
+  const form = new FormData(); allResults.forEach(r => form.append('photos', r.blob, r.name));
+  try { const res = await fetch(BACKEND_URL, {method:'POST', body: form}); if (res.ok) { alert('✅ Sent! Folder: ' + (await res.json()).folder); } else alert('Error: '+res.status); } catch(e) { alert('Connect nahi hua: '+e.message); }
 }
-
-// ZIP
 document.getElementById('zipBtn').addEventListener('click', async () => {
-  const zip = new JSZip();
-  allResults.forEach(r => zip.file(r.name, r.blob));
-  const content = await zip.generateAsync({ type: 'blob' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(content);
-  a.download = 'camera-100-300kb.zip';
-  a.click();
+  const zip = new JSZip(); allResults.forEach(r => zip.file(r.name, r.blob));
+  const c = await zip.generateAsync({type:'blob'}); const a = document.createElement('a'); a.href = URL.createObjectURL(c); a.download='crop-100-300kb.zip'; a.click();
 });
-
-// Compress Logic - 100 to 300
 function compressOne(file) {
   return new Promise((resolve) => {
-    const img = new Image();
-    img.src = URL.createObjectURL(file);
+    const img = new Image(); img.src = URL.createObjectURL(file);
     img.onload = async () => {
       if (file.size >= MIN && file.size <= MAX) { resolve(file); return; }
-      let w = img.width, h = img.height, q = 0.92;
-      let blob = await makeBlob(img, w, h, q);
-      for (let i = 0; i < 12; i++) {
-        if (blob.size <= MAX && blob.size >= MIN) break;
-        if (blob.size > MAX) q -= 0.07; else { q += 0.05; if (q >= 0.95) break; }
-        if (q <= 0.1) break; if (q > 1) q = 0.95;
-        blob = await makeBlob(img, w, h, q);
-      }
-      let t = 0;
-      while (blob.size > MAX && t < 8) { w = Math.floor(w*0.85); h = Math.floor(h*0.85); blob = await makeBlob(img, w, h, 0.85); t++; }
-      t = 0;
-      while (blob.size < MIN && t < 4) { if (w > img.width*1.5) break; w = Math.floor(w*1.15); h = Math.floor(h*1.15); blob = await makeBlob(img, w, h, 0.92); t++; }
+      let w = img.width, h = img.height, q = 0.92; let blob = await makeBlob(img,w,h,q);
+      for (let i=0;i<12;i++){ if(blob.size<=MAX && blob.size>=MIN) break; if(blob.size>MAX) q-=0.07; else { q+=0.05; if(q>=0.95) break; } if(q<=0.1) break; if(q>1) q=0.95; blob = await makeBlob(img,w,h,q); }
+      let t=0; while(blob.size>MAX && t<8){ w=Math.floor(w*0.85); h=Math.floor(h*0.85); blob=await makeBlob(img,w,h,0.85); t++; }
+      t=0; while(blob.size<MIN && t<4){ if(w>img.width*1.5) break; w=Math.floor(w*1.15); h=Math.floor(h*1.15); blob=await makeBlob(img,w,h,0.92); t++; }
       resolve(blob);
     };
   });
 }
-function makeBlob(img, w, h, q) {
-  return new Promise(res => {
-    const c = document.createElement('canvas'); c.width = w; c.height = h;
-    const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0,0,w,h);
-    ctx.drawImage(img,0,0,w,h); c.toBlob(res,'image/jpeg',q);
-  });
-}
+function makeBlob(img,w,h,q){ return new Promise(res=>{ const c=document.createElement('canvas'); c.width=w; c.height=h; const ctx=c.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h); ctx.drawImage(img,0,0,w,h); c.toBlob(res,'image/jpeg',q); }); }
 </script>
 </body>
 </html>
